@@ -1,8 +1,12 @@
 import os
+import time
 import numpy as np
 import pyccl as ccl
 from scipy.interpolate import interp1d
 import pytest
+
+T0 = 0.0
+T0_CLS = 0.0
 
 
 @pytest.fixture(scope='module', params=['fftlog', 'bessel'])
@@ -13,14 +17,14 @@ def corr_method(request):
 
 @pytest.fixture(scope='module', params=['analytic', 'histo'])
 def set_up(request):
+    t0 = time.time()
     nztyp = request.param
     dirdat = os.path.dirname(__file__) + '/data/'
     cosmo = ccl.Cosmology(Omega_c=0.30, Omega_b=0.00, Omega_g=0, Omega_k=0,
                           h=0.7, sigma8=0.8, n_s=0.96, Neff=0, m_nu=0.0,
-                          w0=-1, wa=0, transfer_function='bbks',
+                          w0=-1, wa=0, T_CMB=2.7, transfer_function='bbks',
                           mass_function='tinker',
                           matter_power_spectrum='linear')
-    cosmo.cosmo.params.T_CMB = 2.7
     cosmo.cosmo.gsl_params.INTEGRATION_LIMBER_EPSREL = 2.5E-5
     cosmo.cosmo.gsl_params.INTEGRATION_EPSREL = 2.5E-5
 
@@ -44,20 +48,26 @@ def set_up(request):
         sigz_1 = 0.15
         zmean_2 = 1.5
         sigz_2 = 0.15
-        z1, a1 = np.loadtxt(dirdat + "ia_amp_analytic_1.txt", unpack=True)
-        z2, a2 = np.loadtxt(dirdat + "ia_amp_analytic_2.txt", unpack=True)
+        z1, tmp_a1 = np.loadtxt(dirdat + "ia_amp_analytic_1.txt", unpack=True)
+        z2, tmp_a2 = np.loadtxt(dirdat + "ia_amp_analytic_2.txt", unpack=True)
         pz1 = np.exp(-0.5 * ((z1 - zmean_1) / sigz_1)**2)
         pz2 = np.exp(-0.5 * ((z2 - zmean_2) / sigz_2)**2)
     elif nztyp == 'histo':
         # Histogram case
         z1, pz1 = np.loadtxt(dirdat + "bin1_histo.txt", unpack=True)[:, 1:]
-        _, a1 = np.loadtxt(dirdat + "ia_amp_histo_1.txt", unpack=True)
+        _, tmp_a1 = np.loadtxt(dirdat + "ia_amp_histo_1.txt", unpack=True)
         z2, pz2 = np.loadtxt(dirdat + "bin2_histo.txt",  unpack=True)[:, 1:]
-        _, a2 = np.loadtxt(dirdat + "ia_amp_histo_2.txt", unpack=True)
+        _, tmp_a2 = np.loadtxt(dirdat + "ia_amp_histo_2.txt", unpack=True)
     else:
         raise ValueError("Wrong Nz type " + nztyp)
     bz = np.ones_like(pz1)
-    rz = np.ones_like(pz1)
+
+    # Renormalize the IA amplitude to be consistent with A_IA
+    D1 = ccl.growth_factor(cosmo, 1./(1+z1))
+    D2 = ccl.growth_factor(cosmo, 1./(1+z2))
+    rho_m = ccl.physical_constants.RHO_CRITICAL * cosmo['Omega_m']
+    a1 = - tmp_a1 * D1 / (5e-14 * rho_m)
+    a2 = - tmp_a2 * D2 / (5e-14 * rho_m)
 
     # Initialize tracers
     trc = {}
@@ -71,12 +81,10 @@ def set_up(request):
     trc['l2'] = ccl.WeakLensingTracer(cosmo, (z2, pz2))
     trc['i1'] = ccl.WeakLensingTracer(cosmo, (z1, pz1),
                                       has_shear=False,
-                                      ia_bias=(z1, a1),
-                                      red_frac=(z1, rz))
+                                      ia_bias=(z1, a1))
     trc['i2'] = ccl.WeakLensingTracer(cosmo, (z2, pz2),
                                       has_shear=False,
-                                      ia_bias=(z2, a2),
-                                      red_frac=(z2, rz))
+                                      ia_bias=(z2, a2))
     trc['ct'] = ccl.CMBLensingTracer(cosmo, 1100.)
 
     # Read benchmarks
@@ -164,6 +172,7 @@ def set_up(request):
     ers['ll_12_m'] = interp1d(d[0] / 60., d[3],
                               fill_value=d[3][0],
                               bounds_error=False)(theta)
+    print('setup time:', time.time() - t0)
     return cosmo, trc, bms, ers, fl
 
 
@@ -201,10 +210,23 @@ def set_up(request):
 def test_xi(set_up, corr_method, t1, t2, bm, er, kind, pref):
     cosmo, trcs, bms, ers, fls = set_up
     method, errfac = corr_method
+
+    global T0_CLS
+    t0 = time.time()
     cl = ccl.angular_cl(cosmo, trcs[t1], trcs[t2], fls['ells'])
+    T0_CLS += (time.time() - t0)
+
     ell = np.arange(fls['lmax'])
     cli = interp1d(fls['ells'], cl, kind='cubic')(ell)
+
+    global T0
+    t0 = time.time()
     xi = ccl.correlation(cosmo, ell, cli, bms['theta'],
                          corr_type=kind, method=method)
+    T0 += (time.time() - t0)
+
     xi *= pref
     assert np.all(np.fabs(xi - bms[bm]) < ers[er] * errfac)
+
+    print("time:", T0)
+    print("time cls:", T0_CLS)

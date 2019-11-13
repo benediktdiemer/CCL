@@ -24,7 +24,7 @@ void compute_chi(double a, ccl_cosmology *cosmo, double * chi, int * stat);
 
 static double zdrag_eh(ccl_parameters *params) {
   // eqn 4 of Eisenstein & Hu 1998
-  double OMh2 = params->Omega_m * params->h * params->h;
+  double OMh2 = (params->Omega_c + params->Omega_b) * params->h * params->h;
   double OBh2 = params->Omega_b * params->h * params->h;
   double b1 = 0.313 * pow(OMh2, -0.419) * (1 + 0.607*pow(OMh2, 0.674));
   double b2 = 0.238 * pow(OMh2, 0.223);
@@ -49,7 +49,7 @@ static ccl_cosmology *create_w0eff_cosmo(double w0eff, ccl_cosmology *cosmo, int
   for(i=0; i<3; ++i)
     mnu[i] = 0;
   for(i=0; i<cosmo->params.N_nu_mass; ++i)
-    mnu[i] = cosmo->params.mnu[i];
+    mnu[i] = cosmo->params.m_nu[i];
 
   if (isnan(cosmo->params.A_s))
     norm_pk = cosmo->params.sigma8;
@@ -58,10 +58,10 @@ static ccl_cosmology *create_w0eff_cosmo(double w0eff, ccl_cosmology *cosmo, int
 
   params_w0eff = ccl_parameters_create(
     cosmo->params.Omega_c, cosmo->params.Omega_b, cosmo->params.Omega_k,
-    cosmo->params.Neff, mnu, ccl_mnu_list,
+    cosmo->params.Neff, mnu, cosmo->params.N_nu_mass,
     w0eff, 0, cosmo->params.h, norm_pk,
     cosmo->params.n_s, cosmo->params.bcm_log10Mc, cosmo->params.bcm_etab,
-    cosmo->params.bcm_ks, cosmo->params.nz_mgrowth,
+    cosmo->params.bcm_ks, cosmo->params.mu_0, cosmo->params.sigma_0, cosmo->params.nz_mgrowth,
     cosmo->params.z_mgrowth, cosmo->params.df_mgrowth, status);
 
     if(*status != 0)
@@ -95,6 +95,7 @@ static double w0eff_func(double w0eff, void *p) {
     return NAN;
   }
 
+  ccl_parameters_free(&(cosmo_w0eff->params));
   ccl_cosmology_free(cosmo_w0eff);
   return chi_drag_w0eff - hfd->chi_drag;
 }
@@ -119,6 +120,7 @@ static double get_w0eff(double a, struct hf_model_match_data data) {
       data.cosmo,
       "ccl_halofit.c: ccl_halofit_struct_new(): "
       "could not compute chi_drag for cosmology\n");
+    return NAN;
   }
 
   F.function = &w0eff_func;
@@ -134,31 +136,36 @@ static double get_w0eff(double a, struct hf_model_match_data data) {
 
   T = gsl_root_fsolver_brent;
   s = gsl_root_fsolver_alloc(T);
-  gsl_root_fsolver_set(s, &F, w0eff_low, w0eff_high);
+  if (s == NULL) {
+    *(data.status) = CCL_ERROR_MEMORY;
+  }
+  else {
+    gsl_root_fsolver_set(s, &F, w0eff_low, w0eff_high);
 
-  itr = 0;
-  do {
-    itr++;
-    gsl_status = gsl_root_fsolver_iterate(s);
-    if (gsl_status == GSL_EBADFUNC)
-      break;
+    itr = 0;
+    do {
+      itr++;
+      gsl_status = gsl_root_fsolver_iterate(s);
+      if (gsl_status == GSL_EBADFUNC)
+        break;
 
-    w0eff = gsl_root_fsolver_root(s);
-    w0eff_low = gsl_root_fsolver_x_lower(s);
-    w0eff_high = gsl_root_fsolver_x_upper(s);
+      w0eff = gsl_root_fsolver_root(s);
+      w0eff_low = gsl_root_fsolver_x_lower(s);
+      w0eff_high = gsl_root_fsolver_x_upper(s);
 
-    gsl_status = gsl_root_test_interval(
-      w0eff_low, w0eff_high,
-      1e-6,
-      1e-6);
-  } while (gsl_status == GSL_CONTINUE && itr < max_itr);
+      gsl_status = gsl_root_test_interval(
+        w0eff_low, w0eff_high,
+        1e-6,
+        1e-6);
+    } while (gsl_status == GSL_CONTINUE && itr < max_itr);
 
-  gsl_root_fsolver_free(s);
+    gsl_root_fsolver_free(s);
 
-  if (gsl_status != GSL_SUCCESS || itr >= max_itr) {
-    ccl_raise_gsl_warning(
-      gsl_status, "ccl_halofit.c: get_w0eff: error in root finding for the halofit matching cosmology\n");
-    *(data.status) |= gsl_status;
+    if (gsl_status != GSL_SUCCESS || itr >= max_itr) {
+      ccl_raise_gsl_warning(
+        gsl_status, "ccl_halofit.c: get_w0eff: error in root finding for the halofit matching cosmology\n");
+      *(data.status) |= gsl_status;
+    }
   }
 
   return w0eff;
@@ -268,31 +275,36 @@ static double get_rsigma(double a, struct hf_int_data data) {
 
   T = gsl_root_fsolver_brent;
   s = gsl_root_fsolver_alloc(T);
-  gsl_root_fsolver_set(s, &F, rlow, rhigh);
+  if (s == NULL) {
+    *(data.status) = CCL_ERROR_MEMORY;
+  }
+  else {
+    gsl_root_fsolver_set(s, &F, rlow, rhigh);
 
-  itr = 0;
-  do {
-    itr++;
-    gsl_status = gsl_root_fsolver_iterate(s);
-    if (gsl_status == GSL_EBADFUNC)
-      break;
+    itr = 0;
+    do {
+      itr++;
+      gsl_status = gsl_root_fsolver_iterate(s);
+      if (gsl_status == GSL_EBADFUNC)
+        break;
 
-    rsigma = gsl_root_fsolver_root(s);
-    rlow = gsl_root_fsolver_x_lower(s);
-    rhigh = gsl_root_fsolver_x_upper(s);
+      rsigma = gsl_root_fsolver_root(s);
+      rlow = gsl_root_fsolver_x_lower(s);
+      rhigh = gsl_root_fsolver_x_upper(s);
 
-    gsl_status = gsl_root_test_interval(
-      rlow, rhigh,
-      data.cosmo->gsl_params.INTEGRATION_SIGMAR_EPSREL,
-      data.cosmo->gsl_params.INTEGRATION_SIGMAR_EPSREL);
-  } while (gsl_status == GSL_CONTINUE && itr < max_itr);
+      gsl_status = gsl_root_test_interval(
+        rlow, rhigh,
+        data.cosmo->gsl_params.INTEGRATION_SIGMAR_EPSREL,
+        data.cosmo->gsl_params.INTEGRATION_SIGMAR_EPSREL);
+    } while (gsl_status == GSL_CONTINUE && itr < max_itr);
 
-  gsl_root_fsolver_free(s);
+    gsl_root_fsolver_free(s);
 
-  if (gsl_status != GSL_SUCCESS || itr >= max_itr) {
-    ccl_raise_gsl_warning(
-      gsl_status, "ccl_halofit.c: get_rsigma: error in root finding for the halofit non-linear scale\n");
-    *(data.status) |= gsl_status;
+    if (gsl_status != GSL_SUCCESS || itr >= max_itr) {
+      ccl_raise_gsl_warning(
+        gsl_status, "ccl_halofit.c: get_rsigma: error in root finding for the halofit non-linear scale\n");
+      *(data.status) |= gsl_status;
+    }
   }
 
   return rsigma;
@@ -442,6 +454,7 @@ halofit_struct* ccl_halofit_struct_new(ccl_cosmology *cosmo, int *status) {
           ccl_omega_x(cosmo_w0eff, a_vec[i], ccl_species_nu_label, status);
         vals_de[i] = ccl_omega_x(cosmo_w0eff, a_vec[i], ccl_species_l_label, status);
 
+        ccl_parameters_free(&(cosmo_w0eff->params));
         ccl_cosmology_free(cosmo_w0eff);
         cosmo_w0eff = NULL;
 
@@ -803,8 +816,10 @@ halofit_struct* ccl_halofit_struct_new(ccl_cosmology *cosmo, int *status) {
   free(vals);
   free(vals_om);
   free(vals_de);
-  if (cosmo_w0eff != NULL)
+  if (cosmo_w0eff != NULL) {
+    ccl_parameters_free(&(cosmo_w0eff->params));
     ccl_cosmology_free(cosmo_w0eff);
+  }
 
   return hf;
 }
@@ -867,8 +882,7 @@ double ccl_halofit_power(ccl_cosmology *cosmo, double k, double a, halofit_struc
   C = gsl_spline_eval(hf->C, a, NULL);
 
   weffa = cosmo->params.w0;
-  omegaMz = ccl_omega_x(cosmo, a, ccl_species_m_label, status) +
-    ccl_omega_x(cosmo, a, ccl_species_nu_label, status);
+  omegaMz = ccl_omega_x(cosmo, a, ccl_species_m_label, status);
   omegaDEwz = ccl_omega_x(cosmo, a, ccl_species_l_label, status);
 
   // not using these to match CLASS better - might be a bug in CLASS
@@ -886,7 +900,7 @@ double ccl_halofit_power(ccl_cosmology *cosmo, double k, double a, halofit_struc
   // compute the present day neutrino massive neutrino fraction
   // uses all neutrinos even if they are moving fast
   om_nu = cosmo->params.sum_nu_masses / 93.14 / cosmo->params.h / cosmo->params.h;
-  fnu = om_nu / (cosmo->params.Omega_m + om_nu);
+  fnu = om_nu / (cosmo->params.Omega_m);
 
   // eqns A6 - A13 of Takahashi et al.
   an = pow(
@@ -939,7 +953,7 @@ double ccl_halofit_power(ccl_cosmology *cosmo, double k, double a, halofit_struc
   DeltakH = DeltakHprime / (1.0 + mun/y + nun/y2);
 
   // correction to DeltakH from Bird et al., eqn A6-A7
-  Qnu = fnu * (0.977 - 18.015 * (cosmo->params.Omega_m + om_nu - 0.3));
+  Qnu = fnu * (0.977 - 18.015 * (cosmo->params.Omega_m - 0.3));
   DeltakH *= (1.0 + Qnu);
 
   DeltakNL = DeltakQ + DeltakH;

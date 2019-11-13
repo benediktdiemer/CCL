@@ -1,5 +1,7 @@
 from . import ccllib as lib
 from .pyutils import _vectorize_fn2
+import numpy as np
+from .core import check
 
 
 def linear_matter_power(cosmo, k, a):
@@ -13,6 +15,7 @@ def linear_matter_power(cosmo, k, a):
     Returns:
         float or array_like: Linear matter power spectrum; Mpc^3.
     """
+    cosmo.compute_linear_power()
     return _vectorize_fn2(lib.linear_matter_power,
                           lib.linear_matter_power_vec, cosmo, k, a)
 
@@ -28,8 +31,34 @@ def nonlin_matter_power(cosmo, k, a):
     Returns:
         float or array_like: Nonlinear matter power spectrum; Mpc^3.
     """
+    cosmo.compute_nonlin_power()
     return _vectorize_fn2(lib.nonlin_matter_power,
                           lib.nonlin_matter_power_vec, cosmo, k, a)
+
+
+def sigmaM(cosmo, M, a):
+    """Root mean squared variance for the given halo mass of the linear power
+    spectrum; Msun.
+
+    Args:
+        cosmo (:obj:`Cosmology`): Cosmological parameters.
+        M (float or array_like): Halo masses; Msun.
+        a (float): scale factor.
+
+    Returns:
+        float or array_like: RMS variance of halo mass.
+    """
+    cosmo.compute_sigma()
+
+    # sigma(M)
+    logM = np.log10(np.atleast_1d(M))
+    status = 0
+    sigM, status = lib.sigM_vec(cosmo.cosmo, a, logM,
+                                len(logM), status)
+    check(status)
+    if np.ndim(M) == 0:
+        sigM = sigM[0]
+    return sigM
 
 
 def sigmaR(cosmo, R, a=1.):
@@ -44,6 +73,7 @@ def sigmaR(cosmo, R, a=1.):
         float or array_like: RMS variance in the density field in top-hat
                              sphere; Mpc.
     """
+    cosmo.compute_linear_power()
     return _vectorize_fn2(lib.sigmaR, lib.sigmaR_vec, cosmo, R, a)
 
 
@@ -60,6 +90,7 @@ def sigmaV(cosmo, R, a=1.):
         sigmaV (float or array_like): RMS variance in the displacement field in
                                       top-hat sphere.
     """
+    cosmo.compute_linear_power()
     return _vectorize_fn2(lib.sigmaV, lib.sigmaV_vec, cosmo, R, a)
 
 
@@ -74,4 +105,5 @@ def sigma8(cosmo):
     Returns:
         float: RMS variance in top-hat sphere of radius 8 Mpc/h.
     """
+    cosmo.compute_linear_power()
     return sigmaR(cosmo, 8.0 / cosmo['h'])

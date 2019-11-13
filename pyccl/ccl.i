@@ -20,9 +20,6 @@ from .errors import CCLError
 %include "numpy.i"
 %init %{
     import_array();
-    // Tell CCL library not to quit when an error is thrown (to let Python
-    // exception handler take over)
-    ccl_set_error_policy(CCL_ERROR_POLICY_CONTINUE);
     // Tell CCL to not print to stdout/stderr for debugging.
     ccl_set_debug_policy(CCL_DEBUG_MODE_OFF);
 %}
@@ -43,15 +40,18 @@ from .errors import CCLError
 %include "../include/ccl.h"
 
 %include "ccl_core.i"
-%include "ccl_p2d.i"
+%include "ccl_pk2d.i"
 %include "ccl_background.i"
 %include "ccl_power.i"
+%include "ccl_bcm.i"
 %include "ccl_correlation.i"
-%include "ccl_massfunc.i"
+%include "ccl_tracers.i"
 %include "ccl_cls.i"
 %include "ccl_neutrinos.i"
 %include "ccl_halomod.i"
 %include "ccl_haloprofile.i"
+%include "ccl_mass_conversion.i"
+%include "ccl_sigM.i"
 
 /* list header files not yet having a .i file here */
 %include "../include/ccl_config.h"

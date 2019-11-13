@@ -1,24 +1,32 @@
 pyccl package
 =============
 
+Subpackages
+-----------
+
+.. toctree::
+
+    pyccl.halos
+
 Submodules
 ----------
 
 .. toctree::
 
    pyccl.background
-   pyccl.ccllib
+   pyccl.bcm
+   pyccl.boltzmann
    pyccl.cls
-   pyccl.constants
    pyccl.core
    pyccl.correlation
    pyccl.errors
    pyccl.halomodel
-   pyccl.massfunction
+   pyccl.haloprofile
    pyccl.neutrinos
+   pyccl.pk2d
    pyccl.power
    pyccl.pyutils
-   pyccl.redshifts
+   pyccl.tracers
 
 Module contents
 ---------------

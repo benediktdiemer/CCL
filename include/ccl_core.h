@@ -10,39 +10,10 @@
 #include <gsl/gsl_const_mksa.h>
 
 #include "ccl_utils.h"
+#include "ccl_f1d.h"
+#include "ccl_f2d.h"
 
 CCL_BEGIN_DECLS
-
-
-//p2d extrapolation types for early times
-typedef enum ccl_p2d_extrap_growth_t
-{
-  ccl_p2d_cclgrowth = 401, //Use CCL's linear growth
-  ccl_p2d_customgrowth = 402, //Use a custom growth function
-  ccl_p2d_constantgrowth = 403, //Use a constant growth factor
-  ccl_p2d_no_extrapol = 404, //Do not extrapolate, just throw an exception
-} ccl_p2d_extrap_growth_t;
-
-//p2d interpolation types
-typedef enum ccl_p2d_interp_t
-{
-  ccl_p2d_3 = 303, //Bicubic interpolation
-} ccl_p2d_interp_t;
-
-/**
- * Struct containing a 2D power spectrum
- */
-typedef struct {
-  double lkmin,lkmax; /**< Edges in log(k)*/
-  double amin,amax; /**< Edges in a*/
-  int extrap_order_lok; /**< Order of extrapolating polynomial in log(k) for low k (0, 1 or 2)*/
-  int extrap_order_hik; /**< Order of extrapolating polynomial in log(k) for high k (0, 1 or 2)*/
-  ccl_p2d_extrap_growth_t extrap_linear_growth;  /**< Extrapolation type at high redshifts*/
-  int is_log; /**< Do I hold the values of log(P(k,a))?*/
-  double (*growth)(double); /**< Custom extrapolating growth function*/
-  double growth_factor_0; /**< Constant extrapolating growth factor*/
-  gsl_spline2d *pk; /**< Spline holding the values of P(k,a)*/
-} ccl_p2d_t;
 
 /**
  * Struct to hold physical constants.
@@ -242,13 +213,10 @@ typedef struct ccl_parameters {
   double Neff; // Effective number of relativistic neutrino species in the early universe.
   int N_nu_mass; // Number of species of neutrinos which are nonrelativistic today
   double N_nu_rel;  // Number of species of neutrinos which are relativistic  today
-  double *mnu;  // total mass of massive neutrinos (This is a pointer so that it can hold multiple masses.)
+  double *m_nu;  // total mass of massive neutrinos (This is a pointer so that it can hold multiple masses.)
   double sum_nu_masses; // sum of the neutrino masses.
-  double Omega_n_mass; // Omega_nu for MASSIVE neutrinos
-  double Omega_n_rel; // Omega_nu for MASSLESS neutrinos
-
-  //double Neff_partial[CCL_MAX_NU_SPECIES];
-  //double mnu[CCL_MAX_NU_SPECIES];
+  double Omega_nu_mass; // Omega_nu for MASSIVE neutrinos
+  double Omega_nu_rel; // Omega_nu for MASSLESS neutrinos
 
   // Primordial power spectra
   double A_s;
@@ -262,6 +230,10 @@ typedef struct ccl_parameters {
   double bcm_log10Mc;
   double bcm_etab;
   double bcm_ks;
+
+  // mu / Sigma quasistatica parameterisation of modified gravity params
+  double mu_0;
+  double sigma_0;
 
   // Derived parameters
   double sigma8;
@@ -302,11 +274,11 @@ typedef struct ccl_data {
   gsl_spline * etahmf;
 
   // power spectrum splines
-  ccl_p2d_t * p_lin;
-  ccl_p2d_t * p_nl;
+  ccl_f2d_t * p_lin;
+  ccl_f2d_t * p_nl;
 
   // real-space splines for RSD
-  SplPar* rsd_splines[3];
+  ccl_f1d_t* rsd_splines[3];
   double rsd_splines_scalefactor;
 } ccl_data;
 
@@ -322,7 +294,8 @@ typedef struct ccl_cosmology {
 
   bool computed_distances;
   bool computed_growth;
-  bool computed_power;
+  bool computed_linear_power;
+  bool computed_nonlin_power;
   bool computed_sigma;
   bool computed_hmfparams;
 
@@ -333,21 +306,11 @@ typedef struct ccl_cosmology {
   // other flags?
 } ccl_cosmology;
 
-// Label for whether you are passing a pointer to a sum of neutrino masses or a pointer to a list of 3 masses.
-typedef enum ccl_mnu_convention {
-  ccl_mnu_list = 0,   // you pass a list of three neutrino masses
-  ccl_mnu_sum = 1,  // sum, defaults to splitting with normal hierarchy
-  ccl_mnu_sum_inverted = 2, //sum, split with inverted hierarchy
-  ccl_mnu_sum_equal = 3, //sum, split into equal masses
-  // More options could be added here
-} ccl_mnu_convention;
-
 // Initialization and life cycle of objects
 ccl_cosmology * ccl_cosmology_create(ccl_parameters params, ccl_configuration config);
 
 /* Internal function to set the status message safely. */
 void ccl_cosmology_set_status_message(ccl_cosmology * cosmo, const char * status_message, ...);
-
 
 // User-facing creation routines
 /**
@@ -374,19 +337,18 @@ void ccl_cosmology_set_status_message(ccl_cosmology * cosmo, const char * status
  * @return void
  */
 ccl_parameters ccl_parameters_create(double Omega_c, double Omega_b, double Omega_k,
-                     double Neff, double* mnu, ccl_mnu_convention mnu_type,
-                     double w0, double wa, double h, double norm_pk,
-                     double n_s, double bcm_log10Mc, double bcm_etab, double bcm_ks,
-                     int nz_mgrowth,double *zarr_mgrowth,
-                     double *dfarr_mgrowth, int *status);
-
+				     double Neff, double* mnu, int n_mnu,
+				     double w0, double wa, double h, double norm_pk,
+				     double n_s, double bcm_log10Mc, double bcm_etab, double bcm_ks,
+				     double mu_0, double sigma_0, int nz_mgrowth, double *zarr_mgrowth,
+				     double *dfarr_mgrowth, int *status);
 
 /* ------- ROUTINE: ccl_parameters_create_flat_lcdm --------
 INPUT: some cosmological parameters needed to create a flat LCDM model
 TASK: call ccl_parameters_create to produce an LCDM model
 */
 ccl_parameters ccl_parameters_create_flat_lcdm(double Omega_c, double Omega_b, double h,
-					       double norm_pk, double n_s, int *status);
+double norm_pk, double n_s, int *status);
 
 
 /**

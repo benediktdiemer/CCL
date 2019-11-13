@@ -280,7 +280,8 @@ ccl_cosmology * ccl_cosmology_create(ccl_parameters params, ccl_configuration co
   cosmo->data.p_nl = NULL;
   cosmo->computed_distances = false;
   cosmo->computed_growth = false;
-  cosmo->computed_power = false;
+  cosmo->computed_linear_power = false;
+  cosmo->computed_nonlin_power = false;
   cosmo->computed_sigma = false;
   cosmo->computed_hmfparams = false;
   cosmo->status = 0;
@@ -325,20 +326,19 @@ void ccl_parameters_fill_initial(ccl_parameters * params, int *status)
     params->N_nu_rel* 7.0/8.0 * 4. *
     ccl_constants.STBOLTZ / pow(ccl_constants.CLIGHT, 3) *
     pow(T_nu, 4);
-  params-> Omega_n_rel = rho_nu_rel/rho_crit;
+  params-> Omega_nu_rel = rho_nu_rel/rho_crit;
 
   // If non-relativistic neutrinos are present, calculate the phase_space integral.
   if((params->N_nu_mass)>0) {
-    params->Omega_n_mass = ccl_Omeganuh2(
-      1.0, params->N_nu_mass, params->mnu, params->T_CMB, status) / ((params->h)*(params->h));
-    ccl_check_status_nocosmo(status);
+    params->Omega_nu_mass = ccl_Omeganuh2(
+      1.0, params->N_nu_mass, params->m_nu, params->T_CMB, status) / ((params->h)*(params->h));
   }
   else{
-    params->Omega_n_mass = 0.;
+    params->Omega_nu_mass = 0.;
   }
 
-  params->Omega_m = params->Omega_b + params-> Omega_c;
-  params->Omega_l = 1.0 - params->Omega_m - params->Omega_g - params->Omega_n_rel -params->Omega_n_mass- params->Omega_k;
+  params->Omega_m = params->Omega_b + params-> Omega_c + params->Omega_nu_mass;
+  params->Omega_l = 1.0 - params->Omega_m - params->Omega_g - params->Omega_nu_rel - params->Omega_k;
   // Initially undetermined parameters - set to nan to trigger
   // problems if they are mistakenly used.
   if (isfinite(params->A_s)) {params->sigma8 = NAN;}
@@ -377,10 +377,11 @@ n_s: index of the primordial PS
  */
 ccl_parameters ccl_parameters_create(
                      double Omega_c, double Omega_b, double Omega_k,
-				     double Neff, double* mnu, ccl_mnu_convention mnu_type,
+				     double Neff, double* mnu, int n_mnu,
 				     double w0, double wa, double h, double norm_pk,
 				     double n_s, double bcm_log10Mc, double bcm_etab,
-				     double bcm_ks, int nz_mgrowth, double *zarr_mgrowth,
+				     double bcm_ks, double mu_0, double sigma_0,
+				     int nz_mgrowth, double *zarr_mgrowth,
 				     double *dfarr_mgrowth, int *status)
 {
   #ifndef USE_GSL_ERROR
@@ -389,7 +390,7 @@ ccl_parameters ccl_parameters_create(
 
   ccl_parameters params;
   // Initialize params
-  params.mnu = NULL;
+  params.m_nu = NULL;
   params.z_mgrowth=NULL;
   params.df_mgrowth=NULL;
   params.sigma8 = NAN;
@@ -398,139 +399,19 @@ ccl_parameters ccl_parameters_create(
   params.Omega_b = Omega_b;
   params.Omega_k = Omega_k;
   params.Neff = Neff;
-
-    double *mnu_in = NULL;
-
-  // Decide how to split sum of neutrino masses between 3 neutrinos. We use
-  // a Newton's rule numerical solution (thanks M. Jarvis).
-
-  if (mnu_type==ccl_mnu_sum){
-	  // Normal hierarchy
-
-	  // Set the sum of neutrino masses
-      params.sum_nu_masses = *mnu;
-
-	  mnu_in = malloc(3*sizeof(double));
-
-	  // Check if the sum is zero
-	  if (*mnu<1e-15){
-		  mnu_in[0] = 0.;
-		  mnu_in[1] = 0.;
-		  mnu_in[2] = 0.;
-	  }
-    else{
-	      mnu_in[0] = 0.; // This is a starting guess.
-
-	      double sum_check;
-	      // Check that sum is consistent
-	      mnu_in[1] = sqrt(ccl_constants.DELTAM12_sq);
-	      mnu_in[2] = sqrt(ccl_constants.DELTAM13_sq_pos);
-	      sum_check = mnu_in[0] + mnu_in[1] + mnu_in[2];
-	      if (*mnu < sum_check){
-		      *status = CCL_ERROR_MNU_UNPHYSICAL;
-		      ccl_check_status_nocosmo(status);
-          }
-          double dsdm1;
-          // This is the Newton's method
-          while (fabs(*mnu - sum_check) > 1e-15){
-
-              dsdm1 = 1. + mnu_in[0] / mnu_in[1] + mnu_in[0] / mnu_in[2];
-              mnu_in[0] = mnu_in[0] - (sum_check - *mnu) / dsdm1;
-              mnu_in[1] = sqrt(mnu_in[0]*mnu_in[0] + ccl_constants.DELTAM12_sq);
-              mnu_in[2] = sqrt(mnu_in[0]*mnu_in[0] + ccl_constants.DELTAM13_sq_pos);
-              sum_check = mnu_in[0] + mnu_in[1] + mnu_in[2];
-          }
-	  }
-
-  } else if (mnu_type==ccl_mnu_sum_inverted){
-	  // Inverted hierarchy
-
-	  // Set the sum of neutrino masses
-      params.sum_nu_masses = *mnu;
-
-	  mnu_in = malloc(3*sizeof(double));
-
-	  	  // Check if the sum is zero
-	  if (*mnu<1e-15){
-		  mnu_in[0] = 0.;
-		  mnu_in[1] = 0.;
-		  mnu_in[2] = 0.;
-	  } else{
-
-	      mnu_in[0] = 0.; // This is a starting guess.
-
-	      double sum_check;
-	      // Check that sum is consistent
-	      mnu_in[1] = sqrt(-1.* ccl_constants.DELTAM13_sq_neg - ccl_constants.DELTAM12_sq);
-	      mnu_in[2] = sqrt(-1.* ccl_constants.DELTAM13_sq_neg);
-	      sum_check = mnu_in[0] + mnu_in[1] + mnu_in[2];
-	      if (*mnu < sum_check){
-		      *status = CCL_ERROR_MNU_UNPHYSICAL;
-		      ccl_check_status_nocosmo(status);
-          }
-          double dsdm1;
-          // This is the Newton's method
-          while (fabs(*mnu- sum_check) > 1e-15){
-              dsdm1 = 1. + (mnu_in[0] / mnu_in[1]) + (mnu_in[0] / mnu_in[2]);
-              mnu_in[0] = mnu_in[0] - (sum_check - *mnu) / dsdm1;
-              mnu_in[1] = sqrt(mnu_in[0]*mnu_in[0] + ccl_constants.DELTAM12_sq);
-              mnu_in[2] = sqrt(mnu_in[0]*mnu_in[0] + ccl_constants.DELTAM13_sq_neg);
-              sum_check = mnu_in[0] + mnu_in[1] + mnu_in[2];
-          }
-
-      }
-
-  } else if (mnu_type==ccl_mnu_sum_equal){
-
-	    // Set the sum of neutrino masses
-        params.sum_nu_masses = *mnu;
-
-	    // Split the sum of masses equally
-	    mnu_in = malloc(3*sizeof(double));
-	    mnu_in[0] = params.sum_nu_masses / 3.;
-	    mnu_in[1] = params.sum_nu_masses / 3.;
-	    mnu_in[2] = params.sum_nu_masses / 3.;
-  } else if (mnu_type == ccl_mnu_list){
-      // A list of neutrino masses was already passed in
-	  params.sum_nu_masses = mnu[0] + mnu[1] + mnu[2];
-	  mnu_in = malloc(3*sizeof(double));
-	  for(int i=0; i<3; i++) mnu_in[i] = mnu[i];
-  } else {
-	  *status = CCL_ERROR_NOT_IMPLEMENTED;
+  params.m_nu = malloc(n_mnu*sizeof(double));
+  params.sum_nu_masses = 0.;
+  for(int i = 0; i<n_mnu; i=i+1){
+     params.m_nu[i] = mnu[i];
+     params.sum_nu_masses = params.sum_nu_masses + mnu[i];
   }
 
-  // Check for errors in the neutrino set up (e.g. unphysical mnu)
-  ccl_check_status_nocosmo(status);
-
-  // Check which of the neutrino species are non-relativistic today
-  int N_nu_mass = 0;
-  for(int i = 0; i<3; i=i+1){
-  	if (mnu_in[i] > 0.00017){ // Limit taken from Lesgourges et al. 2012
-  		N_nu_mass = N_nu_mass + 1;
-  	}
-  }
-  params.N_nu_mass = N_nu_mass;
-
-  // Fill the array of massive neutrinos
-  if (N_nu_mass>0){
-  	params.mnu = malloc(params.N_nu_mass*sizeof(double));
-  	int relativistic[3] = {0, 0, 0};
-	for (int i = 0; i < N_nu_mass; i = i + 1){
-		for (int j = 0; j<3; j = j +1){
-			if ((mnu_in[j]>0.00017) && (relativistic[j]==0)){
-				relativistic[j]=1;
-				params.mnu[i] = mnu_in[j];
-				break;
-			}
-		} // end loop over neutrinos
-	} // end loop over massive neutrinos
-  } else{
-	  params.mnu = malloc(sizeof(double));
-	  params.mnu[0] = 0.;
-  }
-  // Free mnu_in
-  if (mnu_in != NULL) free(mnu_in);
-
+  if(params.sum_nu_masses<1e-15){
+    params.N_nu_mass = 0;
+  }else{
+    params.N_nu_mass = n_mnu;
+   } 
+  
   // Dark Energy
   params.w0 = w0;
   params.wa = wa;
@@ -559,6 +440,10 @@ ccl_parameters ccl_parameters_create(
     params.bcm_ks=55.0;
   else
     params.bcm_ks=bcm_ks;
+
+  // Params of the mu / Sigma parameterisation of MG
+  params.mu_0 = mu_0;
+  params.sigma_0 = sigma_0;
 
   // Set remaining standard and easily derived parameters
   ccl_parameters_fill_initial(&params, status);
@@ -597,11 +482,11 @@ ccl_parameters ccl_parameters_create_flat_lcdm(double Omega_c, double Omega_b, d
   double *mnu;
   double mnuval = 0.;  // a pointer to the variable is not kept past the lifetime of this function
   mnu = &mnuval;
-  ccl_mnu_convention mnu_type = ccl_mnu_sum;
+  double mu_0 = 0.;
+  double sigma_0 = 0.;
 
   ccl_parameters params = ccl_parameters_create(Omega_c, Omega_b, Omega_k, Neff,
-        mnu, mnu_type, w0, wa, h, norm_pk, n_s, -1, -1, -1, -1, NULL, NULL, status);
-
+						mnu, 0, w0, wa, h, norm_pk, n_s, -1, -1, -1, mu_0, sigma_0, -1, NULL, NULL, status);
   return params;
 
 }
@@ -615,7 +500,6 @@ ccl_parameters ccl_parameters_create_flat_lcdm(double Omega_c, double Omega_b, d
  */
 void ccl_parameters_write_yaml(ccl_parameters * params, const char * filename, int *status)
 {
-
   FILE * f = fopen(filename, "w");
 
   if (!f){
@@ -647,16 +531,16 @@ void ccl_parameters_write_yaml(ccl_parameters * params, const char * filename, i
   WRITE_DOUBLE(N_nu_rel);
 
   if (params->N_nu_mass>0){
-    fprintf(f, "mnu: [");
+    fprintf(f, "m_nu: [");
     for (int i=0; i<params->N_nu_mass; i++){
-      fprintf(f, "%le, ", params->mnu[i]);
+      fprintf(f, "%le, ", params->m_nu[i]);
     }
     fprintf(f, "]\n");
   }
 
   WRITE_DOUBLE(sum_nu_masses);
-  WRITE_DOUBLE(Omega_n_mass);
-  WRITE_DOUBLE(Omega_n_rel);
+  WRITE_DOUBLE(Omega_nu_mass);
+  WRITE_DOUBLE(Omega_nu_rel);
 
   // Primordial power spectra
   WRITE_DOUBLE(A_s);
@@ -670,6 +554,10 @@ void ccl_parameters_write_yaml(ccl_parameters * params, const char * filename, i
   WRITE_DOUBLE(bcm_log10Mc);
   WRITE_DOUBLE(bcm_etab);
   WRITE_DOUBLE(bcm_ks);
+
+  // Modified gravity parameters
+  WRITE_DOUBLE(mu_0);
+  WRITE_DOUBLE(sigma_0);
 
   // Derived parameters
   WRITE_DOUBLE(sigma8);
@@ -697,7 +585,6 @@ void ccl_parameters_write_yaml(ccl_parameters * params, const char * filename, i
 #undef WRITE_INT
 
   fclose(f);
-
 }
 
 /**
@@ -706,16 +593,13 @@ void ccl_parameters_write_yaml(ccl_parameters * params, const char * filename, i
  * @param f FILE* pointer opened for reading
  * @return void
  */
-ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
-{
-
+ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status) {
   FILE * f = fopen(filename, "r");
 
-  if (!f){
+  if (!f) {
     *status = CCL_ERROR_FILE_READ;
     ccl_parameters bad_params;
-
-    ccl_raise_exception(CCL_ERROR_FILE_READ, "ccl_core.c: Failed to read parameters from file.");
+    ccl_raise_warning(CCL_ERROR_FILE_READ, "ccl_core.c: Failed to read parameters from file.");
 
     return bad_params;
   }
@@ -745,7 +629,7 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
 
   double mnu[3] = {0.0, 0.0, 0.0};
   if (N_nu_mass>0){
-    *status |= (0==fscanf(f, "mnu: ["));
+    *status |= (0==fscanf(f, "m_nu: ["));
     for (int i=0; i<N_nu_mass; i++){
       *status |= (0==fscanf(f, "%le, ", mnu+i));
     }
@@ -753,8 +637,8 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
   }
 
   READ_DOUBLE(sum_nu_masses);
-  READ_DOUBLE(Omega_n_mass);
-  READ_DOUBLE(Omega_n_rel);
+  READ_DOUBLE(Omega_nu_mass);
+  READ_DOUBLE(Omega_nu_rel);
 
   // Primordial power spectra
   READ_DOUBLE(A_s);
@@ -768,6 +652,10 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
   READ_DOUBLE(bcm_log10Mc);
   READ_DOUBLE(bcm_etab);
   READ_DOUBLE(bcm_ks);
+
+  // Modified gravity parameters
+  READ_DOUBLE(mu_0);
+  READ_DOUBLE(sigma_0);
 
   // Derived parameters
   READ_DOUBLE(sigma8);
@@ -806,11 +694,11 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
 
   fclose(f);
 
-
-  if (status){
-    char msg[256];
-    snprintf(msg, 256, "ccl_core.c: Structure of YAML file incorrect: %s", filename);
-    ccl_raise_exception(*status, msg);
+  if (*status) {
+    ccl_raise_warning(
+      *status,
+      "ccl_core.c: Structure of YAML file incorrect: %s",
+      filename);
   }
 
   double norm_pk;
@@ -824,17 +712,16 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
 
   ccl_parameters params = ccl_parameters_create(
     Omega_c, Omega_b, Omega_k,
-    Neff, mnu, ccl_mnu_list,
+    Neff, mnu, N_nu_mass,
     w0, wa, h, norm_pk,
     n_s, bcm_log10Mc, bcm_etab,
-    bcm_ks, nz_mgrowth, z_mgrowth,
+    bcm_ks, mu_0, sigma_0, nz_mgrowth, z_mgrowth,
     df_mgrowth, status);
 
   if(z_mgrowth) free(z_mgrowth);
   if (df_mgrowth) free(df_mgrowth);
 
   return params;
-
 }
 
 
@@ -843,8 +730,7 @@ ccl_parameters ccl_parameters_read_yaml(const char * filename, int *status)
 INPUT: ccl_data
 TASK: free the input data
 */
-void ccl_data_free(ccl_data * data)
-{
+void ccl_data_free(ccl_data * data) {
   //We cannot assume that all of these have been allocated
   //TODO: it would actually make more sense to do this within ccl_cosmology_free,
   //where we could make use of the flags "computed_distances" etc. to figure out
@@ -856,43 +742,47 @@ void ccl_data_free(ccl_data * data)
   gsl_spline_free(data->achi);
   gsl_spline_free(data->logsigma);
   gsl_spline_free(data->dlnsigma_dlogm);
-  ccl_p2d_t_free(data->p_lin);
-  ccl_p2d_t_free(data->p_nl);
+  ccl_f2d_t_free(data->p_lin);
+  ccl_f2d_t_free(data->p_nl);
   gsl_spline_free(data->alphahmf);
   gsl_spline_free(data->betahmf);
   gsl_spline_free(data->gammahmf);
   gsl_spline_free(data->phihmf);
   gsl_spline_free(data->etahmf);
-  ccl_spline_free(data->rsd_splines[0]);
-  ccl_spline_free(data->rsd_splines[1]);
-  ccl_spline_free(data->rsd_splines[2]);
+  ccl_f1d_t_free(data->rsd_splines[0]);
+  ccl_f1d_t_free(data->rsd_splines[1]);
+  ccl_f1d_t_free(data->rsd_splines[2]);
 }
 
 /* ------- ROUTINE: ccl_cosmology_set_status_message --------
 INPUT: ccl_cosmology struct, status_string
 TASK: set the status message safely.
 */
-void ccl_cosmology_set_status_message(ccl_cosmology * cosmo, const char * message, ...)
-{
+void ccl_cosmology_set_status_message(ccl_cosmology * cosmo, const char * message, ...) {
   const int trunc = 480; /* must be < 500 - 4 */
+
   va_list va;
   va_start(va, message);
-  vsnprintf(cosmo->status_message, trunc, message, va);
-  va_end(va);
 
-  /* if truncation happens, message[trunc - 1] is not NULL, ... will show up. */
-  strcpy(&cosmo->status_message[trunc], "...");
+  #pragma omp critical
+  {
+    vsnprintf(cosmo->status_message, trunc, message, va);
+
+    /* if truncation happens, message[trunc - 1] is not NULL, ... will show up. */
+    strcpy(&cosmo->status_message[trunc], "...");
+  }
+
+  va_end(va);
 }
 
 /* ------- ROUTINE: ccl_parameters_free --------
 INPUT: ccl_parameters struct
 TASK: free allocated quantities in the parameters struct
 */
-void ccl_parameters_free(ccl_parameters * params)
-{
-  if (params->mnu != NULL){
-    free(params->mnu);
-    params->mnu = NULL;
+void ccl_parameters_free(ccl_parameters * params) {
+  if (params->m_nu != NULL){
+    free(params->m_nu);
+    params->m_nu = NULL;
   }
   if (params->z_mgrowth != NULL){
     free(params->z_mgrowth);
@@ -909,55 +799,52 @@ void ccl_parameters_free(ccl_parameters * params)
 INPUT: ccl_cosmology struct
 TASK: free the input data and the cosmology struct
 */
-void ccl_cosmology_free(ccl_cosmology * cosmo)
-{
-  ccl_data_free(&cosmo->data);
+void ccl_cosmology_free(ccl_cosmology * cosmo) {
+  if (cosmo != NULL)
+    ccl_data_free(&cosmo->data);
   free(cosmo);
 }
 
-int ccl_get_pk_spline_na(ccl_cosmology *cosmo)
-{
+int ccl_get_pk_spline_na(ccl_cosmology *cosmo) {
   return cosmo->spline_params.A_SPLINE_NA_PK + cosmo->spline_params.A_SPLINE_NLOG_PK - 1;
 }
 
-void ccl_get_pk_spline_a_array(ccl_cosmology *cosmo,int ndout,double* doutput,int *status)
-{
-  double *d;
-  if(ndout!=ccl_get_pk_spline_na(cosmo))
-    *status=CCL_ERROR_INCONSISTENT;
-  if(*status==0) {
-    d=ccl_linlog_spacing(cosmo->spline_params.A_SPLINE_MINLOG_PK,
-			 cosmo->spline_params.A_SPLINE_MIN_PK,
-			 cosmo->spline_params.A_SPLINE_MAX,
-			 cosmo->spline_params.A_SPLINE_NLOG_PK,
-			 cosmo->spline_params.A_SPLINE_NA_PK);
-    if(d==NULL)
-      *status=CCL_ERROR_MEMORY;
+void ccl_get_pk_spline_a_array(ccl_cosmology *cosmo,int ndout,double* doutput,int *status) {
+  double *d = NULL;
+  if (ndout != ccl_get_pk_spline_na(cosmo))
+    *status = CCL_ERROR_INCONSISTENT;
+  if (*status == 0) {
+    d = ccl_linlog_spacing(cosmo->spline_params.A_SPLINE_MINLOG_PK,
+      cosmo->spline_params.A_SPLINE_MIN_PK,
+      cosmo->spline_params.A_SPLINE_MAX,
+      cosmo->spline_params.A_SPLINE_NLOG_PK,
+      cosmo->spline_params.A_SPLINE_NA_PK);
+    if (d == NULL)
+      *status = CCL_ERROR_MEMORY;
   }
   if(*status==0)
-    memcpy(doutput,d,ndout*sizeof(double));
+    memcpy(doutput, d, ndout*sizeof(double));
+
   free(d);
 }
 
-int ccl_get_pk_spline_nk(ccl_cosmology *cosmo)
-{
+int ccl_get_pk_spline_nk(ccl_cosmology *cosmo) {
   double ndecades = log10(cosmo->spline_params.K_MAX) - log10(cosmo->spline_params.K_MIN);
   return (int)ceil(ndecades*cosmo->spline_params.N_K);
 }
 
-void ccl_get_pk_spline_lk_array(ccl_cosmology *cosmo,int ndout,double* doutput,int *status)
-{
-  double *d;
-  if(ndout!=ccl_get_pk_spline_nk(cosmo))
-    *status=CCL_ERROR_INCONSISTENT;
-  if(*status==0) {
-    d=ccl_log_spacing(cosmo->spline_params.K_MIN,cosmo->spline_params.K_MAX,ndout);
-    if(d==NULL)
-      *status=CCL_ERROR_MEMORY;
+void ccl_get_pk_spline_lk_array(ccl_cosmology *cosmo,int ndout,double* doutput,int *status) {
+  double *d = NULL;
+  if (ndout != ccl_get_pk_spline_nk(cosmo))
+    *status = CCL_ERROR_INCONSISTENT;
+  if (*status == 0) {
+    d = ccl_log_spacing(cosmo->spline_params.K_MIN, cosmo->spline_params.K_MAX, ndout);
+    if (d == NULL)
+      *status = CCL_ERROR_MEMORY;
   }
-  if(*status==0) {
-    for(int ii=0;ii<ndout;ii++)
-      doutput[ii]=log(d[ii]);
+  if (*status == 0) {
+    for(int ii=0; ii < ndout; ii++)
+      doutput[ii] = log(d[ii]);
   }
   free(d);
 }
