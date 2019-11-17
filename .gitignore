@@ -67,3 +67,9 @@ tests/benchmark/codes/.ipynb_checkpoints/*
 
 # notebook checkpoints
 benchmarks/data/codes/.ipynb_checkpoints/*
+
+# Ignore project files for Eclipse
+.cproject
+.project
+.pydevproject
+
